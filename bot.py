@@ -86,4 +86,7 @@ app.add_handler(CommandHandler("spin", spin))
 app.add_handler(CommandHandler("getid", getid_command))
 app.add_handler(MessageHandler(filters.PHOTO, getid_image))
 
+print("🤖 BOT STARTING POLLING...")
 app.run_polling()
+
+
