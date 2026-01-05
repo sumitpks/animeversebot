@@ -3,7 +3,6 @@ import random
 import time
 from telegram import (
     Update,
-    InputMediaPhoto,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
@@ -18,9 +17,11 @@ from telegram.ext import (
 
 # ================== CONFIG ==================
 
-ADMIN_IDS = {6752752402, 5526634074}   # ✅ ADMINS SET
+ADMIN_IDS = {6752752402, 5526634074}
 COOLDOWN_SECONDS = 10
 user_cooldowns = {}
+
+pending_add_char = {}  # admin_id -> character_name
 
 # ================== CHARACTERS ==================
 
@@ -43,13 +44,13 @@ characters = [
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
-# ================== COMMANDS ==================
+# ================== USER COMMANDS ==================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome!\n\n"
-        "🔥 /spin – Anime Battle\n"
-        "⏱️ Cooldown: 10 seconds"
+        "👋 Welcome to Anime Battle Bot!\n\n"
+        "🔥 /spin – Start battle\n"
+        "⏱ Cooldown enabled"
     )
 
 async def spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -57,10 +58,10 @@ async def spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = time.time()
 
     last = user_cooldowns.get(user_id, 0)
-    if now - last < COOLDOWN_SECONDS:
-        await update.message.reply_text(
-            f"⏳ Wait {COOLDOWN_SECONDS - int(now - last)}s before spinning again."
-        )
+    remaining = COOLDOWN_SECONDS - int(now - last)
+
+    if remaining > 0:
+        await update.message.reply_text(f"⏳ Wait {remaining}s before next spin.")
         return
 
     user_cooldowns[user_id] = now
@@ -68,42 +69,81 @@ async def spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fighter1, fighter2 = random.sample(characters, 2)
     winner = random.choice([fighter1, fighter2])
 
-    media = [
-        InputMediaPhoto(
-            media=fighter1["img"],
-            caption=f"🔥 {fighter1['name']}  ⚔️  {fighter2['name']}"
-        ),
-        InputMediaPhoto(media=fighter2["img"])
-    ]
+    # First image
+    await update.message.reply_photo(fighter1["img"], caption=f"🔥 {fighter1['name']}")
 
-    await update.message.reply_media_group(media=media)
-
+    # VS
     keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("🆚 BATTLE 🆚", callback_data="vs")]]
+        [[InlineKeyboardButton("🆚 VS 🆚", callback_data="vs")]]
+    )
+    await update.message.reply_text(
+        f"⚔️ {fighter1['name']}  VS  {fighter2['name']}",
+        reply_markup=keyboard
     )
 
-    await update.message.reply_text("⚔️ Battle in progress…", reply_markup=keyboard)
+    # Second image
+    await update.message.reply_photo(fighter2["img"], caption=f"🔥 {fighter2['name']}")
+
+    # Winner
     await update.message.reply_text(f"🏆 WINNER\n\n✅ {winner['name']}")
 
 async def vs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("Battle already finished!")
 
-# ================== ADMIN COMMANDS ==================
+# ================== ADMIN PANEL ==================
 
-async def set_cooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Admin only.")
         return
 
-    if not context.args:
-        await update.message.reply_text("Usage: /setcooldown <seconds>")
+    await update.message.reply_text(
+        "🛠 ADMIN PANEL\n\n"
+        "/addchar <name>\n"
+        "/delchar <name>\n"
+        "/listchar\n"
+        "/setcooldown <seconds>"
+    )
+
+async def addchar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
         return
 
-    global COOLDOWN_SECONDS
-    COOLDOWN_SECONDS = int(context.args[0])
-    await update.message.reply_text(f"✅ Cooldown set to {COOLDOWN_SECONDS}s")
+    if not context.args:
+        await update.message.reply_text("Usage: /addchar <character name>")
+        return
 
-async def list_chars(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = " ".join(context.args)
+    pending_add_char[update.effective_user.id] = name
+    await update.message.reply_text(f"📸 Send photo for **{name}**")
+
+async def receive_char_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if user_id not in pending_add_char:
+        return
+
+    name = pending_add_char.pop(user_id)
+    file_id = update.message.photo[-1].file_id
+
+    characters.append({"name": name, "img": file_id})
+    await update.message.reply_text(f"✅ Character **{name}** added!")
+
+async def delchar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    if not context.args:
+        await update.message.reply_text("Usage: /delchar <name>")
+        return
+
+    name = " ".join(context.args)
+    global characters
+    characters = [c for c in characters if c["name"].lower() != name.lower()]
+
+    await update.message.reply_text(f"🗑 Character **{name}** removed.")
+
+async def listchar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
@@ -113,16 +153,17 @@ async def list_chars(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(text)
 
-# ================== GET FILE ID ==================
+async def setcooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
 
-async def getid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📸 Send ONE image as PHOTO")
+    if not context.args:
+        await update.message.reply_text("Usage: /setcooldown <seconds>")
+        return
 
-async def getid_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.photo:
-        await update.message.reply_text(
-            f"PHOTO file_id:\n{update.message.photo[-1].file_id}"
-        )
+    global COOLDOWN_SECONDS
+    COOLDOWN_SECONDS = int(context.args[0])
+    await update.message.reply_text(f"⏱ Cooldown set to {COOLDOWN_SECONDS}s")
 
 # ================== WEBHOOK ==================
 
@@ -135,13 +176,20 @@ if not TOKEN or not PUBLIC_URL:
 
 app = ApplicationBuilder().token(TOKEN).build()
 
+# User
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("spin", spin))
-app.add_handler(CommandHandler("setcooldown", set_cooldown))
-app.add_handler(CommandHandler("listchar", list_chars))
-app.add_handler(CommandHandler("getid", getid_command))
-app.add_handler(MessageHandler(filters.PHOTO, getid_image))
 app.add_handler(CallbackQueryHandler(vs_callback, pattern="^vs$"))
+
+# Admin
+app.add_handler(CommandHandler("admin", admin_panel))
+app.add_handler(CommandHandler("addchar", addchar))
+app.add_handler(CommandHandler("delchar", delchar))
+app.add_handler(CommandHandler("listchar", listchar))
+app.add_handler(CommandHandler("setcooldown", setcooldown))
+
+# Photo handler (for addchar)
+app.add_handler(MessageHandler(filters.PHOTO, receive_char_photo))
 
 print("🤖 Anime Battle Bot is LIVE")
 
