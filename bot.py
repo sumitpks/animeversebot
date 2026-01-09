@@ -1,105 +1,163 @@
 import os
 import random
 import time
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+import json
+from telegram import Update, InputMediaPhoto
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
 
-# ================== CONFIG ==================
+# ================= CONFIG =================
 
 ADMIN_IDS = {6752752402, 5526634074}
 COOLDOWN_SECONDS = 10
 user_cooldowns = {}
 
-pending_add_char = {}  # admin_id -> character_name
+pending_getid = set()
+pending_add_char = {}  # admin_id -> (name, universe)
 
-# ================== CHARACTERS ==================
+DATA_FILE = "characters.json"
 
-characters = [
-    {"name": "Goku", "img": "AgACAgUAAxkBAAOXaVUbk-2rf55eevSR7oWaDLDw2JIAAt0MaxsMbalWE5UlbEs4sScBAAMCAAN4AAM4BA"},
-    {"name": "Zenitsu", "img": "AgACAgUAAxkBAAObaVUb3AyHLvM3iMr2xBtVR767gJAAAt4MaxsMbalWXyIfCFNRfVUBAAMCAAN5AAM4BA"},
-    {"name": "Naruto Uzumaki", "img": "AgACAgUAAxkBAAOTaVUbUYiN1xxJsFshidUgSC3_U20AAtsMaxsMbalWNhujsvxZ_24BAAMCAAN5AAM4BA"},
-    {"name": "Gojo Satorou", "img": "AgACAgUAAxkBAAOfaVUcGBTA6rHf8mTEaNGkfftinVIAAt8MaxsMbalWWA5pJkECpzUBAAMCAAN5AAM4BA"},
-    {"name": "Aizen", "img": "AgACAgUAAxkBAAN6aVUXUmfg59rAbzoqUqBRgpNwr6sAAs8MaxsMbalW0QJ8Ds9GCYIBAAMCAAN5AAM4BA"},
-    {"name": "Akatsuki", "img": "AgACAgUAAxkBAAOvaVUdnY88-JUNEMc7SR7TTQYdjw4AAuUMaxsMbalWp4li3jbDgywBAAMCAAN4AAM4BA"},
-    {"name": "Asta", "img": "AgACAgUAAxkBAAOzaVUd1F7NwyUxB2m7SXGFgLDQ84AAAugMaxsMbalW4XUdbmZDXjQBAAMCAAN5AAM4BA"},
-    {"name": "Luffy", "img": "AgACAgUAAxkBAAPpaVUhdEc-6rqaS1ansTqohMZjwwYAAgUNaxsMbalW5EEuCdlhSmcBAAMCAAN5AAM4BA"},
-    {"name": "Madara Uchiha", "img": "AgACAgUAAxkBAAPxaVUiBhcCGdg4iItVQm04V_U5zZ4AAhANaxsMbalWY0vUo-aQXIQBAAMCAAN5AAM4BA"},
-    {"name": "Saitama", "img": "AgACAgUAAxkBAAIBAWlVIvmaTA5NPXBmjZXId7luIUhEAAIfDWsbDG2pVojXooqepeN5AQADAgADeQADOAQ"},
-    {"name": "Zoro", "img": "AgACAgUAAxkBAAIBLWlVJT_1l_dAxLiRt_jdGgTclfCGAAJCDWsbDG2pVkNPBrqy8VVnAQADAgADeAADOAQ"},
-]
+# ================= DEFAULT DATA =================
 
-# ================== HELPERS ==================
+DEFAULT_DATA = {
+    "anime": [
+        {"name": "Goku", "img": "AgACAgUAAxkBAAOXaVUbk-2rf55eevSR7oWaDLDw2JIAAt0MaxsMbalWE5UlbEs4sScBAAMCAAN4AAM4BA"},
+        {"name": "Zenitsu", "img": "AgACAgUAAxkBAAObaVUb3AyHLvM3iMr2xBtVR767gJAAAt4MaxsMbalWXyIfCFNRfVUBAAMCAAN5AAM4BA"},
+        {"name": "Naruto Uzumaki", "img": "AgACAgUAAxkBAAOTaVUbUYiN1xxJsFshidUgSC3_U20AAtsMaxsMbalWNhujsvxZ_24BAAMCAAN5AAM4BA"},
+        {"name": "Gojo Satorou", "img": "AgACAgUAAxkBAAOfaVUcGBTA6rHf8mTEaNGkfftinVIAAt8MaxsMbalWWA5pJkECpzUBAAMCAAN5AAM4BA"},
+        {"name": "Aizen", "img": "AgACAgUAAxkBAAN6aVUXUmfg59rAbzoqUqBRgpNwr6sAAs8MaxsMbalW0QJ8Ds9GCYIBAAMCAAN5AAM4BA"},
+        {"name": "5 Gotei Members", "img": "AgACAgUAAxkBAAN-aVUXnUUgBO-dam1dXAPzZmLD5jMAAtAMaxsMbalWbWJ5tvdJd4QBAAMCAAN4AAM4BA"},
+        {"name": "Akatsuki", "img": "AgACAgUAAxkBAAOvaVUdnY88-JUNEMc7SR7TTQYdjw4AAuUMaxsMbalWp4li3jbDgywBAAMCAAN4AAM4BA"},
+        {"name": "Asta", "img": "AgACAgUAAxkBAAOzaVUd1F7NwyUxB2m7SXGFgLDQ84AAAugMaxsMbalW4XUdbmZDXjQBAAMCAAN5AAM4BA"},
+        {"name": "Bleach Group", "img": "AgACAgUAAxkBAAO3aVUeM8nXZ4UONAbB49LUHPg3X-0AAu0MaxsMbalWcNgIc92K0OIBAAMCAAN5AAM4BA"},
+        {"name": "Cosmic Garou", "img": "AgACAgUAAxkBAAO7aVUebzEYG57LdTMvsIcRROtWUE0AAvAMaxsMbalWczsanQ3GBWEBAAMCAAN5AAM4BA"},
+        {"name": "Dragon Ball Group", "img": "AgACAgUAAxkBAAO_aVUeschWlaGvmAZJjxU0tNia5FgAAvUMaxsMbalW_9sSDSye_PQBAAMCAAN5AAM4BA"},
+        {"name": "Garou", "img": "AgACAgUAAxkBAAPDaVUe5-Cx9jpkpu3CJpPOjX-A97gAAvYMaxsMbalWR5A0JxC648sBAAMCAAN4AAM4BA"},
+        {"name": "Garp", "img": "AgACAgUAAxkBAAPHaVUfIafVWNSRva_61XluD0Bvvy0AAvgMaxsMbalW4LS0GKOG19cBAAMCAAN5AAM4BA"},
+        {"name": "Guts", "img": "AgACAgUAAxkBAAPLaVUfTTue2H-Suvi9zQtz0Si8fFEAAvoMaxsMbalWj6oGM4m9FJwBAAMCAAN5AAM4BA"},
+        {"name": "Ichigo Kurosaki", "img": "AgACAgUAAxkBAAPPaVUfijlyJ-8XRHfOBCHZcGmbQFwAAvwMaxsMbalWNNgWbHFz6sIBAAMCAAN5AAM4BA"},
+        {"name": "Itachi Uchiha", "img": "AgACAgUAAxkBAAPTaVUfyq-9eMWNxLfy2mjnryEse0UAAv0MaxsMbalW7c7M0pfayVMBAAMCAAN4AAM4BA"},
+        {"name": "Sung Jin-Woo", "img": "AgACAgUAAxkBAAPXaVUf_rsBj0o88STJSATEBpRKghEAAv4MaxsMbalWaV8TsBKhHhQBAAMCAAN5AAM4BA"},
+        {"name": "Zoro", "img": "AgACAgUAAxkBAAIBLWlVJT_1l_dAxLiRt_jdGgTclfCGAAJCDWsbDG2pVkNPBrqy8VVnAQADAgADeAODOAQ"},
+        {"name": "Robin", "img": "AgACAgUAAxkBAAIBMWlVJaA_IYJ-7IOHvQhJr2QUZ9DWAAJDDWsbDG2pVue1sW047iq8AQADAgADeQADOAQ"}
+    ],
+    "marvel": [
+        {"name": "Iron Man", "img": "PUT_FILE_ID"},
+        {"name": "Thor", "img": "PUT_FILE_ID"}
+    ]
+}
 
-def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+# ================= JSON HELPERS =================
 
-# ================== USER COMMANDS ==================
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        save_data(DEFAULT_DATA)
+        return DEFAULT_DATA
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        save_data(DEFAULT_DATA)
+        return DEFAULT_DATA
+
+data = load_data()
+
+# ================= HELPERS =================
+
+def is_admin(uid: int) -> bool:
+    return uid in ADMIN_IDS
+
+def get_pool(mode: str):
+    if mode == "anime":
+        return data["anime"]
+    if mode == "marvel":
+        return data["marvel"]
+    if mode == "mixed":
+        return data["anime"] + data["marvel"]
+    return data["anime"]
+
+# ================= USER COMMANDS =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome to Anime Battle Bot!\n\n"
-        "🔥 /spin – Start battle\n"
-        "⏱ Cooldown enabled"
+        "🔥 Battle Bot\n\n"
+        "/spin anime\n"
+        "/spin marvel\n"
+        "/spin mixed\n"
+        "/getid"
     )
 
 async def spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    uid = update.effective_user.id
     now = time.time()
 
-    last = user_cooldowns.get(user_id, 0)
-    remaining = COOLDOWN_SECONDS - int(now - last)
-
-    if remaining > 0:
-        await update.message.reply_text(f"⏳ Wait {remaining}s before next spin.")
+    if now - user_cooldowns.get(uid, 0) < COOLDOWN_SECONDS:
+        await update.message.reply_text("⏳ Cooldown active")
         return
 
-    user_cooldowns[user_id] = now
+    user_cooldowns[uid] = now
 
-    fighter1, fighter2 = random.sample(characters, 2)
-    winner = random.choice([fighter1, fighter2])
+    mode = context.args[0].lower() if context.args else "anime"
+    if mode not in ("anime", "marvel", "mixed"):
+        await update.message.reply_text("❌ Use: anime | marvel | mixed")
+        return
 
-    # First image
-    await update.message.reply_photo(fighter1["img"], caption=f"🔥 {fighter1['name']}")
+    pool = get_pool(mode)
+    if len(pool) < 2:
+        await update.message.reply_text("❌ Not enough characters")
+        return
 
-    # VS
-    keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("🆚 VS 🆚", callback_data="vs")]]
-    )
-    await update.message.reply_text(
-        f"⚔️ {fighter1['name']}  VS  {fighter2['name']}",
-        reply_markup=keyboard
-    )
+    c1, c2 = random.sample(pool, 2)
+    winner = random.choice([c1, c2])
 
-    # Second image
-    await update.message.reply_photo(fighter2["img"], caption=f"🔥 {fighter2['name']}")
+    media = [
+        InputMediaPhoto(c1["img"], caption=f"🔥 {c1['name']} 🆚 {c2['name']}"),
+        InputMediaPhoto(c2["img"]),
+    ]
 
-    # Winner
-    await update.message.reply_text(f"🏆 WINNER\n\n✅ {winner['name']}")
+    await update.message.reply_media_group(media)
+    await update.message.reply_text(f"🏆 WINNER: {winner['name']}")
 
-async def vs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer("Battle already finished!")
+# ================= GET FILE ID =================
 
-# ================== ADMIN PANEL ==================
+async def getid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pending_getid.add(update.effective_user.id)
+    await update.message.reply_text("📸 Send a photo")
 
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.photo:
+        return
+
+    uid = update.effective_user.id
+    fid = update.message.photo[-1].file_id
+
+    if uid in pending_getid:
+        pending_getid.remove(uid)
+        await update.message.reply_text(f"🆔 FILE_ID:\n{fid}")
+        return
+
+    if uid in pending_add_char:
+        name, universe = pending_add_char.pop(uid)
+        data[universe].append({"name": name, "img": fid})
+        save_data(data)
+        await update.message.reply_text(f"✅ {name} added to {universe}")
+
+# ================= ADMIN =================
+
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin only.")
         return
-
     await update.message.reply_text(
-        "🛠 ADMIN PANEL\n\n"
-        "/addchar <name>\n"
+        "/addchar <name> <anime|marvel>\n"
         "/delchar <name>\n"
         "/listchar\n"
         "/setcooldown <seconds>"
@@ -108,64 +166,63 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def addchar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
-
-    if not context.args:
-        await update.message.reply_text("Usage: /addchar <character name>")
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /addchar <name> <anime|marvel>")
         return
 
-    name = " ".join(context.args)
-    pending_add_char[update.effective_user.id] = name
-    await update.message.reply_text(f"📸 Send photo for **{name}**")
+    name = " ".join(context.args[:-1])
+    universe = context.args[-1].lower()
 
-async def receive_char_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-
-    if user_id not in pending_add_char:
+    if universe not in ("anime", "marvel"):
+        await update.message.reply_text("❌ Universe must be anime or marvel")
         return
 
-    name = pending_add_char.pop(user_id)
-    file_id = update.message.photo[-1].file_id
-
-    characters.append({"name": name, "img": file_id})
-    await update.message.reply_text(f"✅ Character **{name}** added!")
+    pending_add_char[update.effective_user.id] = (name, universe)
+    await update.message.reply_text(f"📸 Send image for {name} ({universe})")
 
 async def delchar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
-
     if not context.args:
-        await update.message.reply_text("Usage: /delchar <name>")
         return
 
-    name = " ".join(context.args)
-    global characters
-    characters = [c for c in characters if c["name"].lower() != name.lower()]
+    name = " ".join(context.args).lower()
+    for u in ("anime", "marvel"):
+        data[u] = [c for c in data[u] if c["name"].lower() != name]
 
-    await update.message.reply_text(f"🗑 Character **{name}** removed.")
+    save_data(data)
+    await update.message.reply_text("🗑 Character removed")
 
 async def listchar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
-    text = "📜 Characters:\n\n"
-    for i, c in enumerate(characters, 1):
-        text += f"{i}. {c['name']}\n"
+    text = "📜 Characters\n\n"
+    total = 0
+    for u in ("anime", "marvel"):
+        text += f"{u.upper()}:\n"
+        for c in data[u]:
+            text += f"• {c['name']}\n"
+        text += "\n"
+        total += len(data[u])
 
+    text += f"TOTAL: {total}"
     await update.message.reply_text(text)
 
 async def setcooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global COOLDOWN_SECONDS
     if not is_admin(update.effective_user.id):
         return
-
     if not context.args:
-        await update.message.reply_text("Usage: /setcooldown <seconds>")
         return
-
-    global COOLDOWN_SECONDS
-    COOLDOWN_SECONDS = int(context.args[0])
+    try:
+        COOLDOWN_SECONDS = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Enter a valid number")
+        return
     await update.message.reply_text(f"⏱ Cooldown set to {COOLDOWN_SECONDS}s")
 
-# ================== WEBHOOK ==================
+# ================= WEBHOOK =================
 
 TOKEN = os.getenv("BOT_TOKEN")
 PUBLIC_URL = os.getenv("PUBLIC_URL")
@@ -176,22 +233,17 @@ if not TOKEN or not PUBLIC_URL:
 
 app = ApplicationBuilder().token(TOKEN).build()
 
-# User
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("spin", spin))
-app.add_handler(CallbackQueryHandler(vs_callback, pattern="^vs$"))
-
-# Admin
-app.add_handler(CommandHandler("admin", admin_panel))
+app.add_handler(CommandHandler("getid", getid))
+app.add_handler(CommandHandler("admin", admin))
 app.add_handler(CommandHandler("addchar", addchar))
 app.add_handler(CommandHandler("delchar", delchar))
 app.add_handler(CommandHandler("listchar", listchar))
 app.add_handler(CommandHandler("setcooldown", setcooldown))
+app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 
-# Photo handler (for addchar)
-app.add_handler(MessageHandler(filters.PHOTO, receive_char_photo))
-
-print("🤖 Anime Battle Bot is LIVE")
+print("🤖 BOT LIVE")
 
 app.run_webhook(
     listen="0.0.0.0",
